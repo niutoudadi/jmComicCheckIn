@@ -11,7 +11,7 @@ jobs:
     env:
       JM_USERNAME: ${{ secrets.JM_USERNAME }}
       JM_PASSWORD: ${{ secrets.JM_PASSWORD }}
-      PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+      SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -36,8 +36,8 @@ jobs:
             timezone: "Asia/Shanghai"
             run_on_start: true
           notify:
-            - type: pushplus
-              token: "${PUSHPLUS_TOKEN}"
+            - type: serverchan
+              sendkey: "${SERVERCHAN_SENDKEY}"
           EOF
 
       - name: Run check-in
