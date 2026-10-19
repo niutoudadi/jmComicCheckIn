@@ -35,9 +35,6 @@ jobs:
             time: "08:00"
             timezone: "Asia/Shanghai"
             run_on_start: true
-          notify:
-            - type: serverchan
-              sendkey: "${SERVERCHAN_SENDKEY}"
           EOF
 
       - name: Check if already checked in today
@@ -53,17 +50,47 @@ jobs:
           fi
 
       - name: Run check-in
+        id: checkin
         if: steps.guard.outputs.already == '0'
+        shell: bash
         run: |
-          python run.py --once
-          TODAY=$(TZ=Asia/Shanghai date +%Y-%m-%d)
-          echo "$TODAY" > status.txt
+          set +e
+          python run.py --once > checkin.out 2>&1
+          STATUS=$?
+          cat checkin.out
+          if [ $STATUS -eq 0 ]; then
+            TODAY=$(TZ=Asia/Shanghai date +%Y-%m-%d)
+            echo "$TODAY" > status.txt
+          fi
+          exit $STATUS
 
       - name: Commit check-in status
-        if: steps.guard.outputs.already == '0' && success()
+        if: steps.guard.outputs.already == '0' && steps.checkin.outcome == 'success'
+        shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add status.txt
           git commit -m "chore: 记录今日签到 $(TZ=Asia/Shanghai date +%Y-%m-%d)" || echo "无变更"
           git push
+
+      - name: Notify
+        if: always() && steps.guard.outputs.already == '0'
+        shell: bash
+        run: |
+          OUTCOME="${{ steps.checkin.outcome }}"
+          HOUR=$(date -u +%H | sed 's/^0//')
+          if [ "$OUTCOME" = "success" ]; then
+            TITLE="✅ 禁漫天堂签到成功"
+            DESP=$(grep -E '^(✅|❌) ' checkin.out | tail -n 1 || true)
+            [ -z "$DESP" ] && DESP="今日签到已完成"
+          elif [ "$HOUR" -lt 6 ]; then
+            echo "早上签到失败，静默等待晚上重试，不发送通知"
+            exit 0
+          else
+            TITLE="⚠️ 今日签到彻底失败，请手动处理"
+            DESP=$(tail -n 12 checkin.out)
+          fi
+          curl -s -X POST "https://sctapi.ftqq.com/${SERVERCHAN_SENDKEY}.send" \
+            --data-urlencode "title=${TITLE}" \
+            --data-urlencode "desp=${DESP}"
