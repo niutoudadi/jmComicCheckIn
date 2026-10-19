@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "0 0 * * *"
+    - cron: "0 13 * * *"
 
 jobs:
   checkin:
@@ -13,8 +14,7 @@ jobs:
       JM_PASSWORD: ${{ secrets.JM_PASSWORD }}
       SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
 
       - name: Setup Python
         uses: actions/setup-python@v7
@@ -40,16 +40,30 @@ jobs:
               sendkey: "${SERVERCHAN_SENDKEY}"
           EOF
 
-      - name: Run check-in
+      - name: Check if already checked in today
+        id: guard
         run: |
-          for attempt in 1 2 3; do
-            if python run.py --once; then
-              exit 0
-            fi
-            echo "签到失败（第 ${attempt} 次尝试）"
-            if [ "${attempt}" -lt 3 ]; then
-              sleep 120
-            fi
-          done
-          echo "重试 3 次后仍然失败"
-          exit 1
+          TODAY=$(TZ=Asia/Shanghai date +%Y-%m-%d)
+          if [ -f status.txt ] && [ "$(cat status.txt)" = "$TODAY" ]; then
+            echo "今天（$TODAY）已签到，跳过本次运行"
+            echo "already=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "今天尚未签到，继续执行"
+            echo "already=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run check-in
+        if: steps.guard.outputs.already == '0'
+        run: |
+          python run.py --once
+          TODAY=$(TZ=Asia/Shanghai date +%Y-%m-%d)
+          echo "$TODAY" > status.txt
+
+      - name: Commit check-in status
+        if: steps.guard.outputs.already == '0' && success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add status.txt
+          git commit -m "chore: 记录今日签到 $(TZ=Asia/Shanghai date +%Y-%m-%d)" || echo "无变更"
+          git push
