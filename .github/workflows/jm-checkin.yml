@@ -80,7 +80,7 @@ jobs:
         if: always() && steps.guard.outputs.already == '0'
         shell: bash
         run: |
-          OUTCOME="${{ steps.checkin.outcome }}"
+          OUTCOME="${{ steps.checkin.outcome }}"; set +o pipefail
           HOUR=$(TZ=Asia/Shanghai date +%H | sed 's/^0//')
           if [ "$OUTCOME" = "success" ]; then
             if grep -q '^⏭️ ' checkin.out; then
@@ -89,7 +89,7 @@ jobs:
             else
               TITLE="✅ 禁漫天堂签到成功"
             fi
-            DESP=$(grep -E '^[✅⏭️] ' checkin.out | tail -n 1)
+            DESP=$(grep -E '^(✅|⏭️) ' checkin.out | tail -n 1 || true)
             [ -z "$DESP" ] && DESP="签到接口已返回成功"
           elif [ "$HOUR" -lt 12 ]; then
             # 上午（08:30）那次失败：静默等下午 16:00 补签，不打扰
