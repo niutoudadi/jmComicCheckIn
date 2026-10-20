@@ -2,8 +2,9 @@
 import datetime as dt
 
 import pytest
+from freezegun import freeze_time
 
-from jm_checkin.client import JMCheckinClient, JMCheckinError, mask_uid
+from jm_checkin.client import JMCheckinClient, JMCheckinError, JM_TZ, mask_uid
 
 
 def test_mask_uid():
@@ -75,19 +76,43 @@ def test_is_signed_today_signed_flag():
 
 
 def test_is_signed_today_record_signed():
-    today = dt.date.today().day
+    today = dt.datetime.now(JM_TZ).day
     data = {'record': [[{'date': str(today), 'signed': True}]]}
     assert JMCheckinClient.is_signed_today(data) is True
 
 
 def test_is_signed_today_record_unsigned():
-    today = dt.date.today().day
+    today = dt.datetime.now(JM_TZ).day
     data = {'record': [[{'date': str(today), 'signed': False}]]}
     assert JMCheckinClient.is_signed_today(data) is False
 
 
 def test_is_signed_today_empty():
     assert JMCheckinClient.is_signed_today({}) is False
+
+
+def test_is_signed_today_uses_jm_timezone_not_local():
+    """回归测试：北京时间 00:00-08:00（UTC 仍是前一天）不得把昨天当成今天。
+
+    复现场景：2026-10-19 18:53 UTC == 北京 2026-10-20 02:53，
+    此时 19 号已签、20 号未签，必须判定为「未签到」，否则当天会漏签。
+    """
+    record = {'record': [[
+        {'date': f'{d:02d}', 'signed': (d == 19), 'bonus': False}
+        for d in range(1, 21)
+    ]]}
+
+    with freeze_time('2026-10-19 18:53:06'):
+        # 模拟 GitHub runner 的 UTC 本地时区
+        assert dt.date.today().day == 19, '前提：UTC 本地日期仍是 19 号'
+        assert JMCheckinClient.is_signed_today(record) is False, \
+            '按北京时间今天是 20 号且未签，不能误判为已签'
+        assert JMCheckinClient.is_signed_today(record, JM_TZ) is False
+
+    with freeze_time('2026-10-20 03:17:31'):
+        # 北京 10-20 11:17，20 号确实已签 -> 应判为已签
+        signed = {'record': [[{'date': f'{d:02d}', 'signed': (d == 20)} for d in range(1, 21)]]}
+        assert JMCheckinClient.is_signed_today(signed) is True
 
 
 def test_check_in_already_signed():
