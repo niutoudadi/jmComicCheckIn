@@ -5,10 +5,19 @@ from __future__ import annotations
 import datetime as dt
 import logging
 from typing import Any, Dict, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from jmcomic import JmOption, create_option_by_file
 
 logger = logging.getLogger("jmcheckin.client")
+
+# JM 服务器按北京时间（UTC+8）划分每日签到。
+# GitHub Actions runner 的系统时区是 UTC，若直接用 dt.date.today()，
+# 在北京时间 00:00-08:00 之间会拿到"昨天"的日号，导致误判为"今日已签到"。
+try:
+    JM_TZ = ZoneInfo("Asia/Shanghai")
+except ZoneInfoNotFoundError:  # 缺 tzdata 时退化为固定 UTC+8（1991 年后等价）
+    JM_TZ = dt.timezone(dt.timedelta(hours=8))
 
 
 def mask_uid(value: Any) -> str:
@@ -55,12 +64,13 @@ class JMCheckinClient:
         return resp.res_data
 
     @staticmethod
-    def is_signed_today(data: Dict[str, Any]) -> bool:
+    def is_signed_today(data: Dict[str, Any], tz: Optional[ZoneInfo] = None) -> bool:
         """判断今天是否已签到。
 
         record 为当月签到日历: [[{date: 日, signed: bool}, ...], ...]
+        今日的日号必须按 JM 服务器时区（默认北京时间）计算，不能用 runner 本地时区。
         """
-        today = dt.date.today().day
+        today = dt.datetime.now(tz or JM_TZ).day
         if data.get("signed") is True:
             return True
         for group in data.get("record") or []:

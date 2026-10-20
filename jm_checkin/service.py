@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import List
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .client import JMCheckinClient, JMCheckinError
+from .client import JMCheckinClient, JMCheckinError, JM_TZ
 from .config import Account, Config, Schedule
 from .notify import send_notifications
 
@@ -48,7 +48,7 @@ def format_report(results: List[AccountResult]) -> str:
 
 def run_once(cfg: Config) -> List[AccountResult]:
     results = [run_account(cfg, account) for account in cfg.accounts]
-    title = f'{dt.date.today().isoformat()} 禁漫签到结果'
+    title = f'{dt.datetime.now(JM_TZ).date().isoformat()} 禁漫签到结果'
     report = format_report(results)
     logger.info('%s\n%s', title, report)
     if cfg.notifiers:
