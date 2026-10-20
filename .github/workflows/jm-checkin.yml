@@ -3,8 +3,10 @@ name: JM Check-in
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 * * *"
-    - cron: "0 13 * * *"
+    # cron 为 UTC 时间，北京 = UTC+8。两次运行均为白天，不会滑入
+    # 北京时间 00:00-08:00（UTC 16:00-24:00）的日期错位窗口。
+    - cron: "30 0 * * *"   # 北京 08:30  第一次签到
+    - cron: "0 8 * * *"    # 北京 16:00  补签
 
 jobs:
   checkin:
@@ -79,16 +81,23 @@ jobs:
         shell: bash
         run: |
           OUTCOME="${{ steps.checkin.outcome }}"
-          HOUR=$(date -u +%H | sed 's/^0//')
+          HOUR=$(TZ=Asia/Shanghai date +%H | sed 's/^0//')
           if [ "$OUTCOME" = "success" ]; then
-            TITLE="✅ 禁漫天堂签到成功"
-            DESP=$(grep -E '^(✅|❌) ' checkin.out | tail -n 1 || true)
-            [ -z "$DESP" ] && DESP="今日签到已完成"
-          elif [ "$HOUR" -lt 6 ]; then
-            echo "早上签到失败，静默等待晚上重试，不发送通知"
+            if grep -q '^⏭️ ' checkin.out; then
+              # 服务器返回"今日已签到"：本次并未真正签到，文案须如实反映
+              TITLE="⏭️ 禁漫天堂今日已签到（未执行签到）"
+            else
+              TITLE="✅ 禁漫天堂签到成功"
+            fi
+            DESP=$(grep -E '^[✅⏭️] ' checkin.out | tail -n 1)
+            [ -z "$DESP" ] && DESP="签到接口已返回成功"
+          elif [ "$HOUR" -lt 12 ]; then
+            # 上午（08:30）那次失败：静默等下午 16:00 补签，不打扰
+            echo "上午 $HOUR 点签到失败，静默等待下午补签，不发送通知"
             exit 0
           else
-            TITLE="⚠️ 今日签到彻底失败，请手动处理"
+            # 下午（16:00）那次仍失败：需要人工处理
+            TITLE="⚠️ 今日签到失败，请手动签到"
             DESP=$(tail -n 12 checkin.out)
           fi
           curl -s -X POST "https://sctapi.ftqq.com/${SERVERCHAN_SENDKEY}.send" \
