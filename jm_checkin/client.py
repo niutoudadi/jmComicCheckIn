@@ -103,14 +103,38 @@ class JMCheckinClient:
             data={"user_id": self.uid, "daily_id": daily_id},
         )
 
-        if not resp.is_success:
-            msg = ""
-            try:
-                msg = str(resp.res_data.get("msg", ""))
-            except Exception:
-                pass
-            raise JMCheckinError(f"签到接口返回异常: {msg or resp.text[:200]}")
+        # 保留原始响应：jmcomic 遇到非约定结构（例如 data 返回数组）只会抛 TypeError，
+        # 不打原文就无法判断服务器到底返回了什么，线上只能靠重跑反推。
+        raw = (resp.text or "").strip()
+        brief = raw[:300]
 
-        data: Dict[str, Any] = resp.res_data
+        def _already_hint() -> Optional[Dict[str, Any]]:
+            """服务器提示"今日已签到"时按 already 处理，避免误报失败"""
+            if any(key in raw for key in ("已签到", "已打卡", "已经签到", "重复签到")):
+                logger.info("签到接口提示今日已签到: %s", brief)
+                return {"status": "already", "detail": brief}
+            return None
+
+        try:
+            data = resp.res_data if resp.is_success else None
+        except Exception as exc:  # 响应体不是约定的加密字符串，无法解码
+            hint = _already_hint()
+            if hint is not None:
+                return hint
+            raise JMCheckinError(
+                f"签到接口响应无法解析({type(exc).__name__}: {exc})，原文: {brief or '空响应'}"
+            ) from exc
+
+        if data is None:
+            hint = _already_hint()
+            if hint is not None:
+                return hint
+            raise JMCheckinError(f"签到接口返回异常: {brief or '空响应'}")
+
+        if not isinstance(data, dict):
+            raise JMCheckinError(
+                f"签到接口返回结构异常({type(data).__name__})，原文: {brief or '空响应'}"
+            )
+
         logger.info("签到成功: %s", data.get("msg", ""))
         return {"status": "ok", "msg": data.get("msg", ""), "detail": data}
