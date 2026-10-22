@@ -3,10 +3,10 @@ name: JM Check-in
 on:
   workflow_dispatch:
   schedule:
-    # cron 为 UTC 时间，北京 = UTC+8。两次运行均为白天，不会滑入
-    # 北京时间 00:00-08:00（UTC 16:00-24:00）的日期错位窗口。
-    - cron: "30 0 * * *"   # 北京 08:30  第一次签到
-    - cron: "0 8 * * *"    # 北京 16:00  补签
+    # cron 为 UTC，北京时间 = UTC+8。三个时段分别对应 08:00 / 09:00 / 16:00。
+    - cron: "0 0 * * *"   # 北京 08:00  第一次签到：成功通知，失败静默
+    - cron: "0 1 * * *"   # 北京 09:00  首签失败后 1 小时重试：成功通知，失败静默
+    - cron: "0 8 * * *"   # 北京 16:00  最后补签：成功通知，失败也通知
 
 jobs:
   checkin:
@@ -38,6 +38,19 @@ jobs:
             timezone: "Asia/Shanghai"
             run_on_start: true
           EOF
+
+      - name: Resolve schedule slot
+        id: slot
+        shell: bash
+        run: |
+          case "${{ github.event.schedule }}" in
+            "0 0 * * *") SLOT="morning" ;;
+            "0 1 * * *") SLOT="retry" ;;
+            "0 8 * * *") SLOT="evening" ;;
+            *)           SLOT="manual" ;;
+          esac
+          echo "name=$SLOT" >> "$GITHUB_OUTPUT"
+          echo "本次时段：$SLOT"
 
       - name: Check if already checked in today
         id: guard
@@ -80,26 +93,40 @@ jobs:
         if: always() && steps.guard.outputs.already == '0'
         shell: bash
         run: |
-          OUTCOME="${{ steps.checkin.outcome }}"; set +o pipefail
-          HOUR=$(TZ=Asia/Shanghai date +%H | sed 's/^0//')
+          OUTCOME="${{ steps.checkin.outcome }}"
+          SLOT="${{ steps.slot.outputs.name }}"
+          set +o pipefail
+
           if [ "$OUTCOME" = "success" ]; then
             if grep -q '^⏭️ ' checkin.out; then
               # 服务器返回"今日已签到"：本次并未真正签到，文案须如实反映
               TITLE="⏭️ 禁漫天堂今日已签到（未执行签到）"
+            elif [ "$SLOT" = "morning" ]; then
+              TITLE="✅ 禁漫天堂签到成功（08:00）"
+            elif [ "$SLOT" = "retry" ]; then
+              TITLE="✅ 禁漫天堂签到成功（09:00 重试）"
+            elif [ "$SLOT" = "evening" ]; then
+              TITLE="✅ 禁漫天堂签到成功（16:00 补签）"
             else
-              TITLE="✅ 禁漫天堂签到成功"
+              TITLE="✅ 禁漫天堂签到成功（手动触发）"
             fi
             DESP=$(grep -E '^(✅|⏭️) ' checkin.out | tail -n 1 || true)
             [ -z "$DESP" ] && DESP="签到接口已返回成功"
-          elif [ "$HOUR" -lt 12 ]; then
-            # 上午（08:30）那次失败：静默等下午 16:00 补签，不打扰
-            echo "上午 $HOUR 点签到失败，静默等待下午补签，不发送通知"
-            exit 0
           else
-            # 下午（16:00）那次仍失败：需要人工处理
-            TITLE="⚠️ 今日签到失败，请手动签到"
-            DESP=$(tail -n 12 checkin.out)
+            case "$SLOT" in
+              morning|retry)
+                # 08:00 / 09:00 失败都静默，等后面的时段接手
+                echo "$SLOT 时段签到失败，按规则静默，等待下一个时段"
+                exit 0
+                ;;
+              *)
+                # 16:00 补签仍失败，或手动触发失败：需要人工处理
+                TITLE="⚠️ 今日签到失败，请手动签到"
+                DESP=$(tail -n 12 checkin.out)
+                ;;
+            esac
           fi
+
           curl -s -X POST "https://sctapi.ftqq.com/${SERVERCHAN_SENDKEY}.send" \
             --data-urlencode "title=${TITLE}" \
             --data-urlencode "desp=${DESP}"
